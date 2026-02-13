@@ -13,7 +13,7 @@ UUIDs are unfortunately quite long. A v4 UUID like `550e8400-e29b-41d4-a716-4466
 
 This library exists because LLM agents have specific problems with identifiers:
 
-**Agents hallucinate IDs.** When an LLM sees `550e8400-e29b-41d4-a716-446655440000` in a conversation, it may later reproduce it as `550e8400-e29b-41d4-a716-446655440001` -- a single character off, completely valid-looking, pointing at nothing. Word phrases like `nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh` are harder to hallucinate convincingly. Each word is a token the model has seen millions of times; inventing a plausible but wrong combination is much less likely than flipping a hex digit. And if the model does hallucinate a word, the checksum catches it.
+**Agents hallucinate IDs.** When an LLM sees `550e8400-e29b-41d4-a716-446655440000` in a conversation, it may later reproduce it as `550e8400-e29b-41d4-a716-446655440001` -- a single character off, completely valid-looking, pointing at nothing. Word phrases like `nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh` are harder to hallucinate convincingly. Each word is a token the model has seen millions of times; inventing a plausible but wrong combination is much less likely than flipping a hex digit. And if the model does hallucinate a word, the checksum catches it. For plain integer IDs, factor encoding (multiply by a prime like 97) means a randomly invented number has only a ~1% chance of passing validation. None of these prevent an agent from *copying* a valid ID and using it in the wrong context -- that requires application-level checks -- but they catch outright fabrication.
 
 **IDs eat tokens.** A raw UUID costs 18-23 tokens across GPT-4/4o tokenizers. Hyphenated word phrases are roughly token-neutral (~23 tokens) -- but each word is a discrete semantic unit the model can attend to, rather than a hex substring that might get split across token boundaries. Where tokens matter most, the numeric style converts UUIDs to plain integers (13 tokens, a ~40% reduction). And the token-optimized word list ensures that words never cost *more* than one token each, so the encoding is predictable: word count = token count.
 
@@ -37,6 +37,7 @@ This library exists because LLM agents have specific problems with identifiers:
 - **Variable-length integer encoding** -- `42` encodes to 1 word, `u64::MAX` to 7 words
 - **Bit-mixing (Feistel network)** -- adjacent UUIDs and sequential IDs produce completely different phrases
 - **Salted integer shuffling** -- digit-preserving permutation with a secret salt, so `1, 2, 3` become `597, 341, 148` and outsiders can't reverse it or infer database size
+- **Factor encoding** -- multiply IDs by a prime (default 97) so hallucinated numbers fail a divisibility check; with factor 97, a random guess has ~1% chance of passing
 - **Faux UUIDs** -- map any integer to a UUID-formatted string via salted 128-bit Feistel, giving integer-indexed databases UUID-shaped public IDs
 - **5 vocabulary sizes** -- trade word count for vocabulary size (2048 to 32768 words)
 - **2 word list styles** -- `memorable` (real English words) or `token` (LLM token-optimized)
@@ -375,6 +376,38 @@ $ echo "7a7c5d13-e91d-5c3d-1715-ad59d15b33c8" \
     | python examples/decode.py --style faux-uuid --salt wrong-key
 176507643592523770348173476994809259721
 ```
+
+### Factor encoding
+
+Multiply each ID by a prime number. On decode, a divisibility check catches hallucinated values. With the default factor of 97, a randomly guessed integer has only a ~1% chance of passing validation. Use a larger prime for stronger guarantees.
+
+```sh
+$ seq 1 5 | python examples/encode.py -t int --style factor
+97
+194
+291
+388
+485
+
+$ echo "291" | python examples/decode.py -t int --style factor
+3
+
+$ echo "292" | python examples/decode.py -t int --style factor
+error: invalid ID: 292 is not divisible by the factor
+```
+
+Use `--factor` to choose a different prime:
+
+```sh
+$ seq 1 5 | python examples/encode.py -t int --style factor --factor 31
+31
+62
+93
+124
+155
+```
+
+Note that this catches *invented* IDs but not *copied* ones -- an agent can still hallucinate by reusing a valid ID it saw earlier in the wrong context. The same limitation applies to word phrases: an agent can recombine words it knows are valid, or copy an entire phrase verbatim. Factor encoding catches random fabrication, not misattribution.
 
 ### Custom separator
 

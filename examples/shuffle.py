@@ -1,4 +1,4 @@
-"""Salted shuffling: digit-preserving integers and faux UUIDs.
+"""Salted shuffling, factor encoding, and faux UUIDs.
 
 Deterministic and fully reversible.  Uses a balanced Feistel network
 with SHA-256 round keys derived from a user-supplied salt.
@@ -116,3 +116,27 @@ def faux_uuid_to_int(uuid_str: str, *, salt: str = "") -> int:
     """
     n = _uuid.UUID(uuid_str).int
     return _shuffle_in_range(n, _N128, _to_salt(salt), reverse=True)
+
+
+def factor_encode(value: int, *, factor: int) -> int:
+    """Encode an integer by multiplying it with a factor."""
+    if value < 0:
+        raise ValueError("negative values not supported")
+    if factor < 2:
+        raise ValueError("factor must be >= 2")
+    return value * factor
+
+
+def factor_decode(encoded: int, *, factor: int) -> int:
+    """Decode a factor-encoded integer.
+
+    Raises ValueError if the value is not divisible by the factor,
+    which indicates a hallucinated or corrupted ID.
+    """
+    if factor < 2:
+        raise ValueError("factor must be >= 2")
+    if encoded % factor != 0:
+        raise ValueError(
+            f"invalid ID: {encoded} is not divisible by the factor"
+        )
+    return encoded // factor

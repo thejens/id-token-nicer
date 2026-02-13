@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import tiktoken
 
 from id_tokenizer import Codec
-from shuffle import int_to_faux_uuid, shuffle_encode
+from shuffle import factor_encode, int_to_faux_uuid, shuffle_encode
 
 ENCODINGS = [
     ("cl100k_base", "GPT-4"),
@@ -33,7 +33,7 @@ ENCODINGS = [
 ]
 
 
-def _encode_numeric(value: str, typ: str, *, style: str, min_digits: int, salt: str) -> str:
+def _encode_numeric(value: str, typ: str, *, style: str, min_digits: int, salt: str, factor: int) -> str:
     import uuid as _uuid
 
     if typ == "uuid":
@@ -45,6 +45,8 @@ def _encode_numeric(value: str, typ: str, *, style: str, min_digits: int, salt: 
         return int_to_faux_uuid(n, salt=salt)
     if style == "shuffled":
         return shuffle_encode(n, min_digits=min_digits, salt=salt)
+    if style == "factor":
+        return str(factor_encode(n, factor=factor))
 
     return str(n)
 
@@ -60,7 +62,7 @@ def main():
     parser.add_argument("--vocab", "-v", type=int, default=2048)
     parser.add_argument(
         "--style", "-s",
-        choices=["memorable", "token", "numeric", "shuffled", "faux-uuid"],
+        choices=["memorable", "token", "numeric", "shuffled", "faux-uuid", "factor"],
         default="memorable",
     )
     parser.add_argument(
@@ -80,13 +82,19 @@ def main():
         help="Secret salt for shuffled style (must match at decode time)",
     )
     parser.add_argument(
+        "--factor",
+        type=int,
+        default=97,
+        help="Factor for factor style (default: 97, a prime)",
+    )
+    parser.add_argument(
         "--include-debug",
         action="store_true",
         help="Show token counts for input and output across tokenizers",
     )
     args = parser.parse_args()
 
-    is_numeric = args.style in ("numeric", "shuffled", "faux-uuid")
+    is_numeric = args.style in ("numeric", "shuffled", "faux-uuid", "factor")
     c = None if is_numeric else Codec(vocab_size=args.vocab, style=args.style)
     encs = (
         [(tiktoken.get_encoding(name), label) for name, label in ENCODINGS]
@@ -105,6 +113,7 @@ def main():
                     style=args.style,
                     min_digits=args.min_digits,
                     salt=args.salt,
+                    factor=args.factor,
                 )
             else:
                 match args.type:

@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 from id_tokenizer import Codec
-from shuffle import faux_uuid_to_int, shuffle_decode
+from shuffle import factor_decode, faux_uuid_to_int, shuffle_decode
 
 
 def main():
@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--vocab", "-v", type=int, default=2048)
     parser.add_argument(
         "--style", "-s",
-        choices=["memorable", "token", "numeric", "shuffled", "faux-uuid"],
+        choices=["memorable", "token", "numeric", "shuffled", "faux-uuid", "factor"],
         default="memorable",
     )
     parser.add_argument(
@@ -51,9 +51,15 @@ def main():
         default="",
         help="Secret salt (must match encode time)",
     )
+    parser.add_argument(
+        "--factor",
+        type=int,
+        default=97,
+        help="Factor for factor style (default: 97, must match encode time)",
+    )
     args = parser.parse_args()
 
-    is_numeric = args.style in ("numeric", "shuffled", "faux-uuid")
+    is_numeric = args.style in ("numeric", "shuffled", "faux-uuid", "factor")
     c = None if is_numeric else Codec(vocab_size=args.vocab, style=args.style)
 
     for line in sys.stdin:
@@ -64,6 +70,9 @@ def main():
             if is_numeric:
                 if args.style == "faux-uuid":
                     print(faux_uuid_to_int(phrase, salt=args.salt))
+                    continue
+                if args.style == "factor":
+                    print(factor_decode(int(phrase), factor=args.factor))
                     continue
                 import uuid as _uuid
                 if args.style == "shuffled":

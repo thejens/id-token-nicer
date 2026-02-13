@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -15,9 +16,15 @@ from id_tokenizer._substitution import substitute, restore
 # ---------------------------------------------------------------------------
 
 class TestMemoryRegistry:
-    def test_store_returns_key(self) -> None:
-        r = MemoryRegistry()
+    def test_store_returns_key_plain(self) -> None:
+        r = MemoryRegistry(factor=0, mix=False)
         assert r.store("550e8400-e29b-41d4-a716-446655440000") == "UUID_1"
+
+    def test_store_returns_key_default(self) -> None:
+        r = MemoryRegistry()
+        key = r.store("550e8400-e29b-41d4-a716-446655440000")
+        assert key.startswith("UUID_")
+        assert key != "UUID_1"
 
     def test_idempotent(self) -> None:
         r = MemoryRegistry()
@@ -51,28 +58,80 @@ class TestMemoryRegistry:
     def test_protocol(self) -> None:
         assert isinstance(MemoryRegistry(), UuidRegistry)
 
+    def test_factor_only(self) -> None:
+        r = MemoryRegistry(factor=97, mix=False)
+        k1 = r.store("550e8400-e29b-41d4-a716-446655440000")
+        k2 = r.store("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        assert k1 == "UUID_97"
+        assert k2 == "UUID_194"
+
+    def test_mix_keys_non_sequential(self) -> None:
+        r = MemoryRegistry(factor=0, mix=True)
+        keys = [
+            r.store(f"550e8400-e29b-41d4-a716-44665544{i:04d}")
+            for i in range(5)
+        ]
+        suffixes = [int(k.split("_", 1)[1]) for k in keys]
+        assert suffixes != sorted(suffixes)
+
+    def test_default_keys_short(self) -> None:
+        """Default keys (factor=97, mix=True) should be 3-4 digits."""
+        r = MemoryRegistry()
+        keys = [
+            r.store(f"550e8400-e29b-41d4-a716-44665544{i:04d}")
+            for i in range(10)
+        ]
+        for key in keys:
+            suffix = key.split("_", 1)[1]
+            assert 3 <= len(suffix) <= 4, f"suffix {suffix!r} not 3-4 digits"
+
+    def test_factor_mix_combined(self) -> None:
+        r = MemoryRegistry(factor=97, mix=True)
+        k1 = r.store("550e8400-e29b-41d4-a716-446655440000")
+        k2 = r.store("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        assert r.fetch(k1) == "550e8400-e29b-41d4-a716-446655440000"
+        assert r.fetch(k2) == "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        assert k1 != "UUID_1"
+        assert k2 != "UUID_2"
+
+    def test_factor_mix_idempotent(self) -> None:
+        r = MemoryRegistry(factor=97, mix=True)
+        k1 = r.store("550e8400-e29b-41d4-a716-446655440000")
+        k2 = r.store("550e8400-e29b-41d4-a716-446655440000")
+        assert k1 == k2
+        assert len(r) == 1
+
 
 # ---------------------------------------------------------------------------
 # FileRegistry
 # ---------------------------------------------------------------------------
 
 class TestFileRegistry:
-    def test_persistence(self, tmp_path) -> None:
+    def test_persistence_plain(self, tmp_path) -> None:
         path = tmp_path / "reg.json"
-        r1 = FileRegistry(path)
+        r1 = FileRegistry(path, factor=0, mix=False)
         r1.store("550e8400-e29b-41d4-a716-446655440000")
 
-        r2 = FileRegistry(path)
+        r2 = FileRegistry(path, factor=0, mix=False)
         assert r2.fetch("UUID_1") == "550e8400-e29b-41d4-a716-446655440000"
         assert len(r2) == 1
 
-    def test_counter_recovery(self, tmp_path) -> None:
+    def test_persistence_default(self, tmp_path) -> None:
         path = tmp_path / "reg.json"
         r1 = FileRegistry(path)
+        key = r1.store("550e8400-e29b-41d4-a716-446655440000")
+
+        r2 = FileRegistry(path)
+        assert r2.fetch(key) == "550e8400-e29b-41d4-a716-446655440000"
+        assert len(r2) == 1
+
+    def test_counter_recovery_plain(self, tmp_path) -> None:
+        path = tmp_path / "reg.json"
+        r1 = FileRegistry(path, factor=0, mix=False)
         r1.store("550e8400-e29b-41d4-a716-446655440000")
         r1.store("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
-        r2 = FileRegistry(path)
+        r2 = FileRegistry(path, factor=0, mix=False)
         key = r2.store("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         assert key == "UUID_3"
 
@@ -85,7 +144,7 @@ class TestFileRegistry:
 
     def test_json_format(self, tmp_path) -> None:
         path = tmp_path / "reg.json"
-        r = FileRegistry(path)
+        r = FileRegistry(path, factor=0, mix=False)
         r.store("550e8400-e29b-41d4-a716-446655440000")
         data = json.loads(path.read_text())
         assert "mappings" in data
@@ -94,30 +153,64 @@ class TestFileRegistry:
     def test_protocol(self, tmp_path) -> None:
         assert isinstance(FileRegistry(tmp_path / "p.json"), UuidRegistry)
 
+    def test_factor_only_persistence(self, tmp_path) -> None:
+        path = tmp_path / "reg.json"
+        r1 = FileRegistry(path, factor=97, mix=False)
+        k1 = r1.store("550e8400-e29b-41d4-a716-446655440000")
+        assert k1 == "UUID_97"
+
+        r2 = FileRegistry(path, factor=97, mix=False)
+        assert r2.fetch("UUID_97") == "550e8400-e29b-41d4-a716-446655440000"
+        k2 = r2.store("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        assert k2 == "UUID_194"
+
+    def test_factor_mix_counter_recovery(self, tmp_path) -> None:
+        path = tmp_path / "reg.json"
+        r1 = FileRegistry(path, factor=97, mix=True)
+        r1.store("550e8400-e29b-41d4-a716-446655440000")
+        r1.store("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+        r2 = FileRegistry(path, factor=97, mix=True)
+        assert len(r2) == 2
+        k3 = r2.store("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        assert r2.fetch(k3) == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        assert len(r2) == 3
+
 
 # ---------------------------------------------------------------------------
 # substitute()
 # ---------------------------------------------------------------------------
 
 class TestSubstitute:
-    def test_single_uuid(self) -> None:
+    def test_single_uuid_plain(self) -> None:
+        text = "User 550e8400-e29b-41d4-a716-446655440000 logged in"
+        result, reg = substitute(text, factor=0, mix=False)
+        assert result == "User ${UUID_1} logged in"
+        assert len(reg) == 1
+
+    def test_single_uuid_default(self) -> None:
         text = "User 550e8400-e29b-41d4-a716-446655440000 logged in"
         result, reg = substitute(text)
-        assert result == "User ${UUID_1} logged in"
+        assert "${UUID_" in result
+        assert "550e8400" not in result
         assert len(reg) == 1
 
     def test_multiple_uuids(self) -> None:
         text = "a=550e8400-e29b-41d4-a716-446655440000 b=6ba7b810-9dad-11d1-80b4-00c04fd430c8"
         result, reg = substitute(text)
-        assert "${UUID_1}" in result
-        assert "${UUID_2}" in result
         assert len(reg) == 2
+        # Both placeholders present and distinct
+        placeholders = re.findall(r"\$\{UUID_\d+\}", result)
+        assert len(placeholders) == 2
+        assert placeholders[0] != placeholders[1]
 
     def test_duplicate_uuids(self) -> None:
         uuid = "550e8400-e29b-41d4-a716-446655440000"
         text = f"{uuid} and {uuid}"
         result, reg = substitute(text)
-        assert result == "${UUID_1} and ${UUID_1}"
+        placeholders = re.findall(r"\$\{UUID_\d+\}", result)
+        assert len(placeholders) == 2
+        assert placeholders[0] == placeholders[1]
         assert len(reg) == 1
 
     def test_no_uuids(self) -> None:
@@ -128,17 +221,32 @@ class TestSubstitute:
 
     def test_existing_registry(self) -> None:
         reg = MemoryRegistry()
-        reg.store("550e8400-e29b-41d4-a716-446655440000")
+        k1 = reg.store("550e8400-e29b-41d4-a716-446655440000")
         text = "New: 6ba7b810-9dad-11d1-80b4-00c04fd430c8"
         result, reg = substitute(text, registry=reg)
-        assert "${UUID_2}" in result
         assert len(reg) == 2
+        assert f"${{{k1}}}" not in result  # first UUID not in this text
 
     def test_uppercase_uuid(self) -> None:
         text = "ID=550E8400-E29B-41D4-A716-446655440000"
-        result, reg = substitute(text)
+        result, reg = substitute(text, factor=0, mix=False)
         assert result == "ID=${UUID_1}"
         assert reg.fetch("UUID_1") == "550e8400-e29b-41d4-a716-446655440000"
+
+    def test_factor_only(self) -> None:
+        text = "User 550e8400-e29b-41d4-a716-446655440000 logged in"
+        result, reg = substitute(text, factor=97, mix=False)
+        assert result == "User ${UUID_97} logged in"
+        assert len(reg) == 1
+
+    def test_factor_mix(self) -> None:
+        text = "a=550e8400-e29b-41d4-a716-446655440000 b=6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        result, reg = substitute(text, factor=97, mix=True)
+        assert "${UUID_1}" not in result
+        assert "${UUID_2}" not in result
+        restored = restore(result, reg)
+        assert "550e8400-e29b-41d4-a716-446655440000" in restored
+        assert "6ba7b810-9dad-11d1-80b4-00c04fd430c8" in restored
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +258,6 @@ class TestRestore:
         original = "User 550e8400-e29b-41d4-a716-446655440000 did thing"
         substituted, reg = substitute(original)
         restored = restore(substituted, reg)
-        assert restored == original.lower().replace(
-            "user", "User"
-        )  # UUIDs are normalized to lowercase
-        # More precise: the UUID portion is lowercase
         assert "550e8400-e29b-41d4-a716-446655440000" in restored
 
     def test_unknown_placeholders_left_unchanged(self) -> None:
@@ -163,11 +267,11 @@ class TestRestore:
 
     def test_mixed_known_unknown(self) -> None:
         reg = MemoryRegistry()
-        reg.store("550e8400-e29b-41d4-a716-446655440000")
-        text = "${UUID_1} and ${UUID_99}"
+        key = reg.store("550e8400-e29b-41d4-a716-446655440000")
+        text = f"${{{key}}} and ${{UUID_99999}}"
         result = restore(text, reg)
         assert "550e8400-e29b-41d4-a716-446655440000" in result
-        assert "${UUID_99}" in result
+        assert "${UUID_99999}" in result
 
 
 # ---------------------------------------------------------------------------
@@ -184,15 +288,15 @@ class TestRoundtripIntegration:
         )
         sanitized, reg = substitute(prompt)
 
-        # LLM never sees real UUIDs
         assert "550e8400" not in sanitized
         assert "6ba7b810" not in sanitized
 
-        # Simulate LLM response using placeholders
-        llm_response = f"Order {sanitized.split('order ')[1].split(' with')[0]} is newer than {sanitized.split('order ')[2]}."
+        # Extract the placeholders the LLM would see
+        placeholders = re.findall(r"\$\{UUID_\d+\}", sanitized)
+        assert len(placeholders) == 2
 
-        # A simpler approach: the LLM echoes back the placeholders
-        llm_response = "The first order ${UUID_1} was placed before ${UUID_2}."
+        # Simulate LLM echoing back the placeholders
+        llm_response = f"The first order {placeholders[0]} was placed before {placeholders[1]}."
 
         restored = restore(llm_response, reg)
         assert "550e8400-e29b-41d4-a716-446655440000" in restored

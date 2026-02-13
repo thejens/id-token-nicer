@@ -8,10 +8,23 @@ PLACEHOLDER_RE = re.compile(r"\$\{UUID_\d+\}")
 
 
 def substitute(
-    text: str, registry: UuidRegistry | None = None,
+    text: str,
+    registry: UuidRegistry | None = None,
+    *,
+    factor: int = 97,
+    mix: bool = True,
 ) -> tuple[str, UuidRegistry]:
-    """Replace UUIDs in *text* with ``${UUID_N}`` placeholders."""
-    reg: UuidRegistry = registry if registry is not None else MemoryRegistry()
+    """Replace UUIDs in *text* with ``${UUID_N}`` placeholders.
+
+    *factor* and *mix* are forwarded to :class:`MemoryRegistry` when no
+    *registry* is supplied.  Use them to make the placeholder suffixes
+    non-sequential (``mix``) and/or detectable when hallucinated
+    (``factor``).
+    """
+    reg: UuidRegistry = (
+        registry if registry is not None
+        else MemoryRegistry(factor=factor, mix=mix)
+    )
 
     def _replace(m: re.Match[str]) -> str:
         key = reg.store(m.group(0))

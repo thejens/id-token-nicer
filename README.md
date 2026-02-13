@@ -1,38 +1,43 @@
 # id-tokenizer
 
-Encode UUIDs and integers as word sequences that are easier for LLM agents to get right.
+Convert opaque identifiers into LLM-friendly phrases for more reliable AI referencing.
+
+Raw IDs like `550e8400-e29b-41d4-a716-446655440000` become human-readable word sequences that align with model tokenization, reduce hallucinations, and support efficient encoding/decoding in Rust and Python.
 
 ```
 550e8400-e29b-41d4-a716-446655440000
-  --> nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh
+  --> all-ecize-vejovis-minos-abb-allseed-heretic-signum-archhead
 ```
 
 ## Why
 
-UUIDs are unfortunately quite long. A v4 UUID like `550e8400-e29b-41d4-a716-446655440000` is 36 characters of hex and dashes -- visually dense, easy to confuse, and expensive in LLM token budgets. But the actual information content is only 122 bits. What if we used a vocabulary of 2048 words (11 bits each) to describe them instead? That's 12 words for a UUID, and each word is something an LLM can reason about as a discrete unit rather than a string of hex nibbles.
+UUIDs are unfortunately quite long. A v4 UUID like `550e8400-e29b-41d4-a716-446655440000` is 36 characters of hex and dashes -- visually dense, easy to confuse, and expensive in LLM token budgets. But the actual information content is only 122 bits. What if we used a vocabulary of 2048 words (11 bits each) to describe them instead? That's 12 words for a UUID -- or as few as 9 with a 32768-word vocabulary. Each word is something an LLM can reason about as a discrete unit rather than a string of hex nibbles.
 
 This library exists because LLM agents have specific problems with identifiers:
 
-**Agents hallucinate IDs.** When an LLM sees `550e8400-e29b-41d4-a716-446655440000` in a conversation, it may later reproduce it as `550e8400-e29b-41d4-a716-446655440001` -- a single character off, completely valid-looking, pointing at nothing. Word phrases like `nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh` are harder to hallucinate convincingly. Each word is a token the model has seen millions of times; inventing a plausible but wrong combination is much less likely than flipping a hex digit. And if the model does hallucinate a word, the checksum catches it. For plain integer IDs, factor encoding (multiply by a prime like 97) means a randomly invented number has only a ~1% chance of passing validation. None of these prevent an agent from *copying* a valid ID and using it in the wrong context -- that requires application-level checks -- but they catch outright fabrication.
+**Agents hallucinate IDs.** When an LLM sees `550e8400-e29b-41d4-a716-446655440000` in a conversation, it may later reproduce it as `550e8400-e29b-41d4-a716-446655440001` -- a single character off, completely valid-looking, pointing at nothing. Word phrases like `nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh` are harder to hallucinate convincingly. Each word is a token the model has seen millions of times; inventing a plausible but wrong combination is much less likely than flipping a hex digit. And if the model does hallucinate a word, the checksum catches it. For plain integer IDs, factor encoding (multiply by a prime like 97) means a randomly invented number has only a ~1% chance of passing validation. None of these prevent an agent from *copying* a valid ID and using it in the wrong context -- that requires application-level checks -- but they catch outright fabrication. Or you can skip the problem entirely: **UUID substitution** (`substitute` / `restore`) replaces every UUID with a short placeholder like `${UUID_1}` before the text reaches the LLM, then swaps the originals back into the response. The model never sees a real UUID, so it *cannot* hallucinate one -- it just echoes `${UUID_1}`, which maps back to the exact original.
 
 **IDs eat tokens.** A raw UUID costs 18-23 tokens across GPT-4/4o tokenizers. Hyphenated word phrases are roughly token-neutral (~23 tokens) -- but each word is a discrete semantic unit the model can attend to, rather than a hex substring that might get split across token boundaries. Where tokens matter most, the numeric style converts UUIDs to plain integers (13 tokens, a ~40% reduction). And the token-optimized word list ensures that words never cost *more* than one token each, so the encoding is predictable: word count = token count.
 
-**Sequential IDs leak patterns.** If an agent sees database rows 1, 2, 3, it will happily predict row 4 exists -- and it might be right, or it might hallucinate a row that was deleted. Feistel bit-mixing turns sequential inputs into scattered outputs, breaking the pattern without adding bits. The same mixing, applied with a secret salt, prevents leaking information like database sizes through URL parameters. You can even map integer IDs to faux UUIDs -- `1` becomes `7a7c5d13-e91d-5c3d-1715-ad59d15b33c8` -- giving integer-indexed databases a UUID-shaped public API without changing the underlying schema.
+**Sequential IDs leak patterns.** If an agent sees database rows 1, 2, 3, it will happily predict row 4 exists -- and it might be right, or it might hallucinate a row that was deleted. Feistel bit-mixing turns sequential inputs into scattered outputs, breaking the pattern without adding bits. The same mixing, applied with a secret salt, prevents leaking information like database sizes through URL parameters.
+
+**Integer databases can look like UUID databases.** Many systems use auto-incrementing integers internally but want UUID-shaped identifiers in their public API -- for consistency, to avoid leaking row counts, or because a consumer expects UUID format. Faux UUIDs do exactly this: `1` becomes `7a7c5d13-e91d-5c3d-1715-ad59d15b33c8` via salted 128-bit Feistel mixing. The mapping is bijective (every integer maps to exactly one UUID and back), deterministic (same salt always gives the same result), and requires no lookup table or database column change. Swap the salt to get an entirely different mapping.
 
 **Encoding and decoding must be fast.** Agents call tools in tight loops. Encoding is O(n) in the number of words (one hash per word, no search). Decoding is O(n) too -- each word hashes directly to its index, no dictionary lookup needed. The word lists are constructed so that `xxh64(word) & (vocab_size - 1) == slot_index`, making decode a pure arithmetic operation.
 
 ### Design goals
 
-1. **Reduce hallucination** -- words are harder to hallucinate than hex; checksums catch errors; bloom filters catch typos early
-2. **Predictable token cost** -- each word is exactly one token in GPT-4, GPT-4o, Gemma, Llama 3, and more; numeric mode cuts UUID tokens by ~40%
+1. **Reduce hallucination** -- words are harder to hallucinate than hex; checksums catch errors; bloom filters catch typos early; or eliminate hallucination entirely with UUID substitution
+2. **Predictable token cost** -- each word is exactly one token in GPT-4, GPT-4o, Gemma, Llama 3, and more; numeric mode cuts UUID tokens by ~40%; substitution mode shrinks UUIDs to 9-char placeholders
 3. **O(n) encode/decode** -- no search, no lookup tables at decode time, just hashing
-4. **Multiple modes** -- `memorable` for human-readable, `token` for LLM-optimized, `shuffled` for pattern-hiding
+4. **Multiple modes** -- `memorable` for human-readable, `token` for LLM-optimized, `numeric` for minimal tokens, `shuffled` for pattern-hiding, `factor` for hallucination detection
 5. **Work for any ID type** -- UUIDs, integers, fixed-width IDs, arbitrary bytes
 6. **Hide sequential patterns** -- Feistel mixing and salted shuffling prevent agents (and users) from guessing adjacent IDs
 7. **Faux UUIDs** -- map integer IDs to UUID-formatted values with a secret salt, giving integer-indexed databases a UUID-shaped public API
 
 ## Features
 
+- **UUID substitution** -- `substitute()` / `restore()` replace UUIDs with `${UUID_N}` placeholders before LLM calls and swap originals back in; the model never sees a real UUID, so hallucination is impossible. Pluggable registry interface (in-memory or JSON-file-backed) lets you persist mappings across calls
 - **UUID-aware encoding** -- strips RFC 4122 variant bits for a stronger checksum, validates version on decode
 - **Variable-length integer encoding** -- `42` encodes to 1 word, `u64::MAX` to 7 words
 - **Bit-mixing (Feistel network)** -- adjacent UUIDs and sequential IDs produce completely different phrases
@@ -69,7 +74,7 @@ cargo install --path .
 The `id-tokenizer` command is available after installation. It auto-detects UUIDs vs integers when the type is omitted.
 
 ```sh
-# Encode a UUID
+# Encode a UUID (defaults: vocab 2048, memorable style)
 id-tokenizer encode 550e8400-e29b-41d4-a716-446655440000
 # nil-gol-bun-also-yuca-fret-hon-gunne-egg-drop-bice-cosh
 
@@ -89,9 +94,9 @@ id-tokenizer encode int 42
 id-tokenizer encode u64 12345
 # davy-mird-oak-twa-pan-tur-uji
 
-# Larger vocab = fewer words
-id-tokenizer encode 550e8400-e29b-41d4-a716-446655440000 --vocab 32768
-# (9 words instead of 12)
+# Larger vocab = fewer words (--vocab accepts size or power: 15 = 2^15 = 32768)
+id-tokenizer encode 550e8400-e29b-41d4-a716-446655440000 --vocab 15
+# all-ecize-vejovis-minos-abb-allseed-heretic-signum-archhead
 
 # Pipe from stdin
 echo "550e8400-e29b-41d4-a716-446655440000" | id-tokenizer encode
@@ -103,8 +108,10 @@ seq 100 105 | id-tokenizer encode int
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--vocab N` / `-v N` | Vocabulary size: 2048, 4096, 8192, 16384, 32768 | 2048 |
+| `--vocab N` / `-v N` | Vocabulary size: 2048, 4096, 8192, 16384, 32768 (or 11-15 as power of 2) | 2048 |
 | `--style S` / `-s S` | Word list: `memorable` or `token` | memorable |
+
+The Python example scripts (`examples/encode.py`, `examples/decode.py`) support additional styles: `numeric`, `shuffled`, `faux-uuid`, and `factor`. See [Examples](#examples) below.
 
 ### Encoding types
 
@@ -142,6 +149,55 @@ phrase = t.uuid_to_words("550e8400-e29b-41d4-a716-446655440000")
 c.uuid_word_count()   # 12 for V2048, 9 for V32768
 c.word_count(8)       # words needed for 8-byte payload
 ```
+
+### UUID substitution (for LLM pipelines)
+
+Strip UUIDs from text before sending to an LLM, then restore them in the response. The model works with compact `${UUID_N}` placeholders instead of 36-character hex strings -- it can't hallucinate what it never sees.
+
+```python
+from id_tokenizer import substitute, restore
+
+# Before sending to the LLM: replace UUIDs with placeholders
+prompt = "Compare order 550e8400-e29b-41d4-a716-446655440000 with order 6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+sanitized, registry = substitute(prompt)
+# sanitized = "Compare order ${UUID_1} with order ${UUID_2}"
+
+# Send `sanitized` to the LLM -- it never sees a real UUID
+llm_response = call_llm(sanitized)  # e.g. "Order ${UUID_1} was placed before ${UUID_2}."
+
+# After receiving the response: swap placeholders back to originals
+final = restore(llm_response, registry)
+# "Order 550e8400-e29b-41d4-a716-446655440000 was placed before 6ba7b810-9dad-11d1-80b4-00c04fd430c8."
+```
+
+The same UUID always maps to the same placeholder (idempotent, case-insensitive), so duplicates within a prompt are handled correctly. Unknown placeholders in the LLM's response (e.g. a hallucinated `${UUID_99}`) are left as-is rather than causing an error.
+
+Pass an existing registry to accumulate mappings across a multi-turn conversation:
+
+```python
+from id_tokenizer import substitute, restore, MemoryRegistry
+
+registry = MemoryRegistry()
+
+# Turn 1
+prompt_1, registry = substitute("Find order 550e8400-e29b-41d4-a716-446655440000", registry)
+response_1 = restore(call_llm(prompt_1), registry)
+
+# Turn 2 -- same registry, so ${UUID_1} still refers to the same order
+prompt_2, registry = substitute("Now check order 6ba7b810-9dad-11d1-80b4-00c04fd430c8", registry)
+response_2 = restore(call_llm(prompt_2), registry)
+```
+
+For persistence across process restarts, use `FileRegistry`:
+
+```python
+from id_tokenizer import FileRegistry, substitute, restore
+
+registry = FileRegistry("uuid_mappings.json")  # loads existing mappings, writes on every store
+sanitized, registry = substitute(text, registry)
+```
+
+The registry interface is a `typing.Protocol` -- implement `store(uuid) -> key`, `fetch(key) -> uuid | None`, and `__len__()` to plug in database-backed storage or any other backend.
 
 Module-level convenience functions are also available:
 
@@ -257,6 +313,21 @@ nil-azzo-fun-also-oop-ized-eps-lsa-apk-hai-ived-ddb
 
 $ echo "nil-azzo-fun-also-oop-ized-eps-lsa-apk-hai-ived-ddb" | python examples/decode.py --style token
 550e8400-e29b-41d4-a716-446655440000
+```
+
+### UUID substitution
+
+Replace UUIDs with `${UUID_N}` placeholders before an LLM call, then restore them in the output. The model can only echo short placeholders -- it never sees a real UUID.
+
+```python
+>>> from id_tokenizer import substitute, restore
+>>> text = "Delete user 550e8400-e29b-41d4-a716-446655440000 from org 6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+>>> sanitized, reg = substitute(text)
+>>> sanitized
+'Delete user ${UUID_1} from org ${UUID_2}'
+>>> # ... LLM returns: "Deleted ${UUID_1} from ${UUID_2}."
+>>> restore("Deleted ${UUID_1} from ${UUID_2}.", reg)
+'Deleted 550e8400-e29b-41d4-a716-446655440000 from 6ba7b810-9dad-11d1-80b4-00c04fd430c8.'
 ```
 
 ### Larger vocabularies = fewer words
@@ -576,18 +647,21 @@ src/
   main.rs         CLI binary
 python/
   id_tokenizer/
-    __init__.py     Re-exports native Rust module
-    _cli.py         Python CLI entry point
+    __init__.py       Re-exports native Rust module + substitution API
+    _cli.py           Python CLI entry point
+    _registry.py      UuidRegistry protocol, MemoryRegistry, FileRegistry
+    _substitution.py  substitute() / restore() for LLM pipelines
 tools/
   gen_wordlist.py         Memorable word list generator
   gen_tokenlist.py        Token-optimized word list generator
   blocklists/             Profanity filter lists (LDNOOBW, Google)
 examples/
-  encode.py               Pipe-friendly encoder with extra styles (numeric, shuffled)
+  encode.py               Pipe-friendly encoder with extra styles (numeric, shuffled, factor, faux-uuid)
   decode.py               Pipe-friendly decoder
   shuffle.py              Digit-preserving Feistel shuffle (salted)
   batch.py                TSV batch encode/decode
   token_stats.py          Token count comparison across styles
 tests/
-  test_codec.py           Python test suite (97 tests)
+  test_codec.py           Codec round-trip tests (97 tests)
+  test_registry.py        UUID registry + substitution tests (22 tests)
 ```

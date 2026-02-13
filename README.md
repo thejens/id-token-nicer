@@ -1,6 +1,6 @@
 # id-tokenizer
 
-Encode UUIDs and integers as word sequences that LLMs can handle without hallucinating.
+Encode UUIDs and integers as word sequences that are easier for LLM agents to get right.
 
 ```
 550e8400-e29b-41d4-a716-446655440000

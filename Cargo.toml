@@ -1,0 +1,26 @@
+[package]
+name = "id-tokenizer"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "id_tokenizer"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "id-tokenizer"
+path = "src/main.rs"
+
+[dependencies]
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+uuid = "1"
+thiserror = "2"
+
+[features]
+default = []
+python = ["pyo3"]
+
+[profile.release]
+lto = true
+strip = true

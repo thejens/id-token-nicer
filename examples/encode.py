@@ -27,6 +27,17 @@ import tiktoken
 from id_tokenizer import Codec
 from shuffle import factor_encode, int_to_faux_uuid, shuffle_encode
 
+_VALID_VOCABS = {2048, 4096, 8192, 16384, 32768}
+
+
+def _parse_vocab(v: int) -> int:
+    """Accept either a vocab size (2048) or a power of 2 (11)."""
+    if 11 <= v <= 15:
+        return 1 << v
+    if v in _VALID_VOCABS:
+        return v
+    raise SystemExit(f"error: vocab must be 2048..32768 or 11..15 (as power of 2)")
+
 ENCODINGS = [
     ("cl100k_base", "GPT-4"),
     ("o200k_base", "GPT-4o"),
@@ -93,6 +104,7 @@ def main():
         help="Show token counts for input and output across tokenizers",
     )
     args = parser.parse_args()
+    args.vocab = _parse_vocab(args.vocab)
 
     is_numeric = args.style in ("numeric", "shuffled", "faux-uuid", "factor")
     c = None if is_numeric else Codec(vocab_size=args.vocab, style=args.style)

@@ -25,6 +25,17 @@ sys.path.insert(0, os.path.dirname(__file__))
 from id_tokenizer import Codec
 from shuffle import factor_decode, faux_uuid_to_int, shuffle_decode
 
+_VALID_VOCABS = {2048, 4096, 8192, 16384, 32768}
+
+
+def _parse_vocab(v: int) -> int:
+    """Accept either a vocab size (2048) or a power of 2 (11)."""
+    if 11 <= v <= 15:
+        return 1 << v
+    if v in _VALID_VOCABS:
+        return v
+    raise SystemExit(f"error: vocab must be 2048..32768 or 11..15 (as power of 2)")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Decode word phrases to values")
@@ -58,6 +69,8 @@ def main():
         help="Factor for factor style (default: 97, must match encode time)",
     )
     args = parser.parse_args()
+
+    args.vocab = _parse_vocab(args.vocab)
 
     is_numeric = args.style in ("numeric", "shuffled", "faux-uuid", "factor")
     c = None if is_numeric else Codec(vocab_size=args.vocab, style=args.style)

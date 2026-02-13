@@ -4,13 +4,13 @@ use id_tokenizer::*;
 
 fn parse_vocab(s: &str) -> Vocab {
     match s {
-        "2048" => Vocab::V2048,
-        "4096" => Vocab::V4096,
-        "8192" => Vocab::V8192,
-        "16384" => Vocab::V16384,
-        "32768" => Vocab::V32768,
+        "11" | "2048" => Vocab::V2048,
+        "12" | "4096" => Vocab::V4096,
+        "13" | "8192" => Vocab::V8192,
+        "14" | "16384" => Vocab::V16384,
+        "15" | "32768" => Vocab::V32768,
         _ => {
-            eprintln!("error: vocab must be 2048, 4096, 8192, 16384, or 32768");
+            eprintln!("error: vocab must be 2048..32768 or 11..15 (as power of 2)");
             process::exit(1);
         }
     }
